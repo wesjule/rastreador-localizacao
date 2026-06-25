@@ -38,9 +38,17 @@ interface LocationDao {
     
     @Insert
     suspend fun insert(location: LocationEntity)
-    
+
     @Query("DELETE FROM locations")
     suspend fun deleteAll()
+
+    // Lote mais ANTIGO primeiro (ordem cronológica p/ desenhar o trajeto certo no painel).
+    @Query("SELECT * FROM locations ORDER BY id ASC LIMIT :limit")
+    suspend fun getOldestBatch(limit: Int): List<LocationEntity>
+
+    // Apaga SÓ os pontos já confirmados pelo servidor (por id) — preserva os capturados durante o envio.
+    @Query("DELETE FROM locations WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
 }
 
 @Database(entities = [LocationEntity::class], version = 1, exportSchema = false)

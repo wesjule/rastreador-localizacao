@@ -4,9 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -14,7 +11,6 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -30,84 +26,88 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStartStop: Button
     private lateinit var btnEnviar: Button
     private lateinit var editServerUrl: EditText
-    
+    private lateinit var editDriverName: EditText
+
     private lateinit var database: LocationDatabase
     private var isServiceRunning = false
-    
+
     companion object {
         private const val PERMISSION_REQUEST_CODE = 1001
         private const val PREFS_NAME = "LocationAppPrefs"
         private const val KEY_SERVER_URL = "server_url"
-        private const val DEFAULT_SERVER_URL = "http://192.168.1.100:5000"
+        private const val KEY_DRIVER_NAME = "driver_name"
+        private const val DEFAULT_SERVER_URL = "https://anoteia.com.br"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        
+
         database = LocationDatabase.getDatabase(this)
-        
+
         initViews()
-        loadServerUrl()
+        loadSettings()
         checkPermissions()
         updateUI()
     }
-    
+
     private fun initViews() {
         statusText = findViewById(R.id.statusText)
         locCountText = findViewById(R.id.locCountText)
         btnStartStop = findViewById(R.id.btnStartStop)
         btnEnviar = findViewById(R.id.btnEnviar)
         editServerUrl = findViewById(R.id.editServerUrl)
-        
+        editDriverName = findViewById(R.id.editDriverName)
+
         btnStartStop.setOnClickListener {
             if (isServiceRunning) {
                 stopLocationService()
             } else {
                 if (checkPermissions()) {
+                    saveSettings()
                     startLocationService()
                 }
             }
         }
-        
+
         btnEnviar.setOnClickListener {
-            saveServerUrl()
-            enviarLocalizacoes()
+            saveSettings()
+            enviarAgora()
         }
     }
-    
-    private fun loadServerUrl() {
+
+    private fun loadSettings() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val url = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
-        editServerUrl.setText(url)
+        editServerUrl.setText(prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL)
+        editDriverName.setText(prefs.getString(KEY_DRIVER_NAME, "") ?: "")
     }
-    
-    private fun saveServerUrl() {
-        val url = editServerUrl.text.toString()
+
+    private fun saveSettings() {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_SERVER_URL, url)
+            .putString(KEY_SERVER_URL, editServerUrl.text.toString().trim())
+            .putString(KEY_DRIVER_NAME, editDriverName.text.toString().trim())
             .apply()
     }
-    
+
     private fun checkPermissions(): Boolean {
         val permissions = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             permissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
         }
-        
+
         val permissionsToRequest = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        
+
         return if (permissionsToRequest.isNotEmpty()) {
             ActivityCompat.requestPermissions(
                 this,
@@ -119,14 +119,14 @@ class MainActivity : AppCompatActivity() {
             true
         }
     }
-    
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        
+
         if (requestCode == PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
                 Toast.makeText(this, "Permissões concedidas!", Toast.LENGTH_SHORT).show()
@@ -139,7 +139,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    
+
     private fun startLocationService() {
         val intent = Intent(this, LocationService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -149,23 +149,24 @@ class MainActivity : AppCompatActivity() {
         }
         isServiceRunning = true
         updateUI()
+        Toast.makeText(this, "Rastreando e enviando automaticamente", Toast.LENGTH_SHORT).show()
     }
-    
+
     private fun stopLocationService() {
         val intent = Intent(this, LocationService::class.java)
         stopService(intent)
         isServiceRunning = false
         updateUI()
     }
-    
+
     private fun updateUI() {
         lifecycleScope.launch {
             val count = withContext(Dispatchers.IO) {
                 database.locationDao().getLocationCount()
             }
-            
-            locCountText.text = "Localizações salvas: $count"
-            
+
+            locCountText.text = "Pontos no buffer (ainda não enviados): $count"
+
             if (isServiceRunning) {
                 statusText.text = "Status: Rastreando"
                 statusText.setTextColor(getColor(android.R.color.holo_green_dark))
@@ -177,81 +178,51 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    
+
     override fun onResume() {
         super.onResume()
         updateUI()
     }
-    
-    private fun enviarLocalizacoes() {
-        if (!isConnectedToWifi()) {
-            AlertDialog.Builder(this)
-                .setTitle("Sem WiFi")
-                .setMessage("Você não está conectado ao WiFi. Deseja enviar mesmo assim usando dados móveis?")
-                .setPositiveButton("Sim") { _, _ ->
-                    realizarEnvio()
-                }
-                .setNegativeButton("Não", null)
-                .show()
-            return
-        }
-        
-        realizarEnvio()
-    }
-    
-    private fun realizarEnvio() {
-        val serverUrl = editServerUrl.text.toString()
-        
+
+    // Envio manual ("Enviar agora"): mesmo caminho do automático (lote + apaga por id), sem trava de WiFi.
+    private fun enviarAgora() {
+        val serverUrl = editServerUrl.text.toString().trim()
+
         if (serverUrl.isBlank()) {
             Toast.makeText(this, "Digite o endereço do servidor", Toast.LENGTH_SHORT).show()
             return
         }
-        
+
         lifecycleScope.launch {
             try {
                 btnEnviar.isEnabled = false
                 btnEnviar.text = "Enviando..."
-                
-                val locations = withContext(Dispatchers.IO) {
-                    database.locationDao().getAllLocations()
-                }
-                
-                if (locations.isEmpty()) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Nenhuma localização para enviar",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    return@launch
-                }
-                
+
                 val deviceId = Settings.Secure.getString(
                     contentResolver,
                     Settings.Secure.ANDROID_ID
                 )
-                
-                val result = withContext(Dispatchers.IO) {
-                    NetworkHelper.enviarLocalizacoes(serverUrl, deviceId, locations)
-                }
-                
-                if (result) {
-                    withContext(Dispatchers.IO) {
-                        database.locationDao().deleteAll()
+                val name = editDriverName.text.toString().trim()
+
+                val sent = withContext(Dispatchers.IO) {
+                    val batch = database.locationDao().getOldestBatch(500)
+                    if (batch.isEmpty()) return@withContext 0
+                    val ok = NetworkHelper.enviarLocalizacoes(serverUrl, deviceId, name, batch)
+                    if (ok) {
+                        database.locationDao().deleteByIds(batch.map { it.id })
+                        batch.size
+                    } else {
+                        -1
                     }
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Localizações enviadas com sucesso!",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    updateUI()
-                } else {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Erro ao enviar localizações",
-                        Toast.LENGTH_LONG
-                    ).show()
                 }
-                
+
+                when {
+                    sent > 0 -> Toast.makeText(this@MainActivity, "Enviado: $sent ponto(s)", Toast.LENGTH_LONG).show()
+                    sent == 0 -> Toast.makeText(this@MainActivity, "Nada no buffer — tudo já foi enviado", Toast.LENGTH_SHORT).show()
+                    else -> Toast.makeText(this@MainActivity, "Falha ao enviar (verifique o endereço/sinal)", Toast.LENGTH_LONG).show()
+                }
+                updateUI()
+
             } catch (e: Exception) {
                 Toast.makeText(
                     this@MainActivity,
@@ -260,24 +231,8 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             } finally {
                 btnEnviar.isEnabled = true
-                btnEnviar.text = "Enviar para Servidor"
+                btnEnviar.text = "Enviar agora"
             }
         }
     }
-    
-    private fun isConnectedToWifi(): Boolean {
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val network = connectivityManager.activeNetwork ?: return false
-            val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-            return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-        } else {
-            @Suppress("DEPRECATION")
-            val networkInfo = connectivityManager.activeNetworkInfo
-            @Suppress("DEPRECATION")
-            return networkInfo?.type == ConnectivityManager.TYPE_WIFI
-        }
-    }
 }
-

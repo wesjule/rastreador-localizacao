@@ -8,37 +8,53 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write   # necessário p/ publicar o Release com o APK
+
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
-      
+
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-      
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-      
+
       - name: Dar permissão ao gradlew
         run: chmod +x android-app/gradlew
-      
+
       - name: Compilar APK Debug
         run: |
           cd android-app
           ./gradlew assembleDebug --no-daemon --stacktrace
-      
-      - name: Upload APK
+
+      - name: Renomear APK
+        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk entregador.apk
+
+      - name: Upload APK (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          path: entregador.apk
           retention-days: 30
-      
+
+      # Publica um Release com o APK -> link FIXO de download direto (sem login, não expira):
+      #   https://github.com/wesjule/rastreador-localizacao/releases/latest/download/entregador.apk
+      - name: Publicar Release (link fixo p/ download)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.0.${{ github.run_number }}
+          name: Entregador APK v2.0.${{ github.run_number }}
+          body: "App do entregador (rastreamento em tempo real). Baixe o entregador.apk e instale no celular."
+          files: entregador.apk
+          make_latest: true
+
       - name: Informações do Build
         run: |
           echo "✅ APK compilado com sucesso!"
           echo "📦 Tamanho do APK:"
-          ls -lh android-app/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh entregador.apk
